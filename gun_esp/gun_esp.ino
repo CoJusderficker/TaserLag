@@ -17,7 +17,7 @@
 #define BLUELEDPin GPIO_NUM_41
 #define AUXLEDPin GPIO_NUM_40
 
-#define SensPin GPIO_NUM_4
+#define SensPin1 GPIO_NUM_4
 
 
 #define SOUND_NO_MORE_SHOTS 2
@@ -62,7 +62,7 @@ void setup() {
   pinMode(AUXLEDPin, OUTPUT);
   pinMode(IRLEDPin, OUTPUT);
 
-  pinMode(SensPin, INPUT);
+  pinMode(SensPin1, INPUT);
 
   Serial.begin(9600);
 
@@ -118,7 +118,7 @@ void setup() {
   rmt_driver_install(rmt_cfg.channel, 16, 0);
 
 
-  attachInterrupt(SensPin, isr_sens_1, CHANGE);
+  attachInterrupt(SensPin1, isr_sens_1, CHANGE);
   userScheduler.addTask(taskCheckIRBuffer);
   taskCheckIRBuffer.enable();
 }
@@ -217,51 +217,22 @@ void shoot() {
 }
 
 
-uint32_t changes[32];
-uint8_t changes_size = 0;
+uint32_t changes_1[32] = {};
+uint8_t changes_1_size = 0;
+
 
 // log changes of sens pin
 void isr_sens_1() {
-
-  changes[changes_size] = micros();
-  changes_size++;
+  changes_1[changes_1_size] = micros();
+  changes_1_size++;
 }
 
+
 void check_ir_buffer() {
-
-  // if buffer is not empty and first entry is older than 10ms, analyse
-  if(changes[0] && micros() - changes[0] >= 10000) {
-
-    // 1st: check for time diff under 150us -> error
-    for(int i=1; i<changes_size; i++) {
-
-      if(changes[i] - changes[i-1] < 150) {
-        Serial.println("Error");
-        return;
-      }
-    }
-    Serial.println("timing ok.");
-
-    // generate binary sequence from timestamps
-    bool sequence[32];
-    uint8_t seq_size = 0;
-    bool state = true;
-
-    for(int i=1; i<changes_size; i++) {  // read out data
-      int diff = changes[i] - changes[i-1];
-      int nearest_multiple = round(diff/300.0);  // find nearest multiple to 300usec -> append that many digits
-      
-      for(int j=0; j<nearest_multiple; j++) {  // append
-        sequence[seq_size] = state;
-        seq_size++;
-        Serial.print(state);
-      }
-      state = !state;
-    }
-    
-    Serial.println("Clear buffer...");
-    memset(changes, 0, sizeof(changes)); // clear array
-    changes_size = 0;
+  // if change detected and first change is older than 10msec
+  if(changes_1[0]  &&  micros() >= changes_1[0]+10000) {
+    Serial.println(changes_1[0]);
+    memset(changes_1, 0, sizeof(changes_1)); // clear array
   }
 }
 
@@ -296,6 +267,8 @@ void loop() {
 
   if(digitalRead(OKButtonPin) == LOW) {
     Serial.println("OK");
+    Serial.println(millis());
+    Serial.println(T_lastShot+1000);
 
     if(millis() > T_lastShot+1000) {
       Serial.println("Pew!");
