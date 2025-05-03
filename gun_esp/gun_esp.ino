@@ -228,7 +228,7 @@ void isr_sens_1() {
 }
 
 void check_ir_buffer() {
-  //test
+
   // if buffer is not empty and first entry is older than 10ms, analyse
   if(changes[0] && micros() - changes[0] >= 10000) {
 
