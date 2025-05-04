@@ -17,7 +17,7 @@
 #define BLUELEDPin GPIO_NUM_41
 #define AUXLEDPin GPIO_NUM_40
 
-#define SensPin1 GPIO_NUM_4
+#define SensPin1 GPIO_NUM_6
 
 
 #define SOUND_NO_MORE_SHOTS 2
@@ -62,7 +62,7 @@ void setup() {
   pinMode(AUXLEDPin, OUTPUT);
   pinMode(IRLEDPin, OUTPUT);
 
-  pinMode(SensPin1, INPUT);
+  pinMode(SensPin1, INPUT_PULLUP);
 
   Serial.begin(9600);
 
@@ -222,7 +222,7 @@ uint8_t changes_1_size = 0;
 
 
 // log changes of sens pin
-void isr_sens_1() {
+void IRAM_ATTR isr_sens_1() {
   changes_1[changes_1_size] = micros();
   changes_1_size++;
 }
@@ -230,7 +230,7 @@ void isr_sens_1() {
 
 void check_ir_buffer() {
   // if change detected and first change is older than 10msec
-  if(changes_1[0]  &&  micros() >= changes_1[0]+10000) {
+  if(changes_1[0]  /*&&  micros() >= changes_1[0]+10000*/) {
     Serial.println(changes_1[0]);
     memset(changes_1, 0, sizeof(changes_1)); // clear array
   }
@@ -258,17 +258,13 @@ void loop() {
     Serial.println("Right");
     lcd.clear();
     lcd.print("right");
-    digitalWrite(IRLEDPin, HIGH);
   }
   else {
-    digitalWrite(IRLEDPin, LOW);
   }
 
 
   if(digitalRead(OKButtonPin) == LOW) {
     Serial.println("OK");
-    Serial.println(millis());
-    Serial.println(T_lastShot+1000);
 
     if(millis() > T_lastShot+1000) {
       Serial.println("Pew!");
