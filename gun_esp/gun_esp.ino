@@ -228,6 +228,17 @@ void IRAM_ATTR isr_sens_1() {
 }
 
 
+uint8_t countBits(uint16_t n) {
+    uint8_t count = 0;
+    while (n) {
+        n &= (n - 1);  // delete least-significant bit
+        count++;
+    }
+    return count;
+}
+
+
+// analyses IR buffer and determines, whether i was shot
 void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
   // if buffer is not empty and first entry is older than 10ms, analyse
   if(buffer[0] && micros() - buffer[0] >= 10000) {
@@ -243,8 +254,8 @@ void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
     Serial.println("timing ok.");
 
     // generate binary sequence from timestamps
-    bool sequence[32];
-    uint8_t seq_size = 0;
+    uint16_t sequence;
+    uint8_t bit = 0;
     bool state = true;
 
     for(size_t i = 1; i < *buffer_size; i++) {  // read out data
@@ -252,19 +263,36 @@ void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
       int nearest_multiple = round(diff / 300.0);  // find nearest multiple to 300usec -> append that many digits
       
       for(int j = 0; j < nearest_multiple; j++) {  // append
-        if (seq_size < 32) {  // prevent overflow
-          sequence[seq_size] = state;
-          seq_size++;
-          Serial.print(state);
+        if (bit < 16) {  // prevent overflow
+
+          bitWrite(sequence, 15-bit, state);
+          bit++;
         }
       }
       state = !state;
     }
-    Serial.println();
+    Serial.println(sequence, BIN);
     
     Serial.println("Clear buffer...");
     memset(buffer, 0, (*buffer_size) * sizeof(uint32_t)); // clear array
     *buffer_size = 0;
+
+
+    // validate checksum
+
+    uint8_t calc_checksum = countBits(0b1111111110000011 & sequence);
+    uint8_t recv_checksum = (sequence & 0b0000000001111100) >> 2;
+
+    Serial.println(calc_checksum);
+    Serial.println(recv_checksum);
+
+    if(calc_checksum == recv_checksum) {
+      Serial.println("Hit!");
+    }
+    else {
+      Serial.println("CS dont match");
+    }
+
   }
 }
 
