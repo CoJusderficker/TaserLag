@@ -205,9 +205,8 @@ void shoot() {
   rmt_item32_t items[16];
 
   for(int i=0; i<16; i++) {
-
-    if(bitRead(ircode, i)) {items[15-i] = rmt_item_high;} 
     
+    if(bitRead(ircode, i)) {items[15-i] = rmt_item_high;} 
     else {items[15-i] = rmt_item_low;}
   }
   rmt_write_items(rmt_cfg.channel, items, 16, false);
@@ -240,9 +239,9 @@ uint8_t countBits(uint16_t n) {
 
 // analyses IR buffer and determines, whether i was shot
 void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
+
   // if buffer is not empty and first entry is older than 10ms, analyse
   if(buffer[0] && micros() - buffer[0] >= 10000) {
-    Serial.println("Something in buffer!");
 
     // 1st: check for time diff under 150us -> error
     for(size_t i = 1; i < *buffer_size; i++) {
@@ -271,20 +270,17 @@ void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
       }
       state = !state;
     }
+    Serial.print("Received Ir Sequence: ");
     Serial.println(sequence, BIN);
     
     Serial.println("Clear buffer...");
     memset(buffer, 0, (*buffer_size) * sizeof(uint32_t)); // clear array
     *buffer_size = 0;
 
-
     // validate checksum
 
     uint8_t calc_checksum = countBits(0b1111111110000011 & sequence);
     uint8_t recv_checksum = (sequence & 0b0000000001111100) >> 2;
-
-    Serial.println(calc_checksum);
-    Serial.println(recv_checksum);
 
     if(calc_checksum == recv_checksum) {
       Serial.println("Hit!");
