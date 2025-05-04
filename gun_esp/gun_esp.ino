@@ -45,9 +45,9 @@ SoftwareSerial AudioSerial(Audio_RX_Pin, Audio_TX_Pin);
 
 
 void sendMessage();
-void check_ir_buffer();
+void check_all_ir_buffers();
 Task taskSendMessage(TASK_SECOND * 1, TASK_FOREVER, &sendMessage);
-Task taskCheckIRBuffer(TASK_MILLISECOND*1, TASK_FOREVER, &check_ir_buffer);
+Task taskCheckIRBuffer(TASK_MILLISECOND*1, TASK_FOREVER, &check_all_ir_buffers);
 rmt_config_t rmt_cfg;
 static const rmt_item32_t rmt_item_high = {{{299, 1, 1, 0}}};
 static const rmt_item32_t rmt_item_low = {{{299, 0, 1, 0}}};
@@ -218,7 +218,7 @@ void shoot() {
 
 
 uint32_t changes_1[32] = {};
-uint8_t changes_1_size = 0;
+size_t changes_1_size = 0;
 
 
 // log changes of sens pin
@@ -228,12 +228,50 @@ void IRAM_ATTR isr_sens_1() {
 }
 
 
-void check_ir_buffer() {
-  // if change detected and first change is older than 10msec
-  if(changes_1[0]  /*&&  micros() >= changes_1[0]+10000*/) {
-    Serial.println(changes_1[0]);
-    memset(changes_1, 0, sizeof(changes_1)); // clear array
+void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
+  // if buffer is not empty and first entry is older than 10ms, analyse
+  if(buffer[0] && micros() - buffer[0] >= 10000) {
+    Serial.println("Something in buffer!");
+
+    // 1st: check for time diff under 150us -> error
+    for(size_t i = 1; i < *buffer_size; i++) {
+      if(buffer[i] - buffer[i - 1] < 150) {
+        Serial.println("Too tight timing.");
+        return;
+      }
+    }
+    Serial.println("timing ok.");
+
+    // generate binary sequence from timestamps
+    bool sequence[32];
+    uint8_t seq_size = 0;
+    bool state = true;
+
+    for(size_t i = 1; i < *buffer_size; i++) {  // read out data
+      int diff = buffer[i] - buffer[i - 1];
+      int nearest_multiple = round(diff / 300.0);  // find nearest multiple to 300usec -> append that many digits
+      
+      for(int j = 0; j < nearest_multiple; j++) {  // append
+        if (seq_size < 32) {  // prevent overflow
+          sequence[seq_size] = state;
+          seq_size++;
+          Serial.print(state);
+        }
+      }
+      state = !state;
+    }
+    Serial.println();
+    
+    Serial.println("Clear buffer...");
+    memset(buffer, 0, (*buffer_size) * sizeof(uint32_t)); // clear array
+    *buffer_size = 0;
   }
+}
+
+
+void check_all_ir_buffers() {
+
+  analyzeBuffer(changes_1, &changes_1_size);
 }
 
 
