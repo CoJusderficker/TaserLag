@@ -4,6 +4,7 @@
 #include <painlessMesh.h>
 #include <Arduino.h>
 #include <driver/rmt.h>
+#include <Button2.h>
 
 
 #define Audio_RX_Pin GPIO_NUM_39
@@ -53,11 +54,19 @@ static const rmt_item32_t rmt_item_high = {{{299, 1, 1, 0}}};
 static const rmt_item32_t rmt_item_low = {{{299, 0, 1, 0}}};
 void isr_sens_1();
 
+Button2 OKButton;
+Button2 LeftButton;
+Button2 RightButton;
+void _on_OKButton_pressed(Button2& b);
+void _on_LeftButton_pressed(Button2& b);
+void _on_RightButton_pressed(Button2& b);
+void _on_OKButton_released(Button2& b);
+void _on_LeftButton_released(Button2& b);
+void _on_RightButton_released(Button2& b);
+
+
 
 void setup() {
-  pinMode(LeftButtonPin, INPUT_PULLUP);
-  pinMode(RightButtonPin, INPUT_PULLUP);
-  pinMode(OKButtonPin, INPUT_PULLUP);
   pinMode(BLUELEDPin, OUTPUT);
   pinMode(AUXLEDPin, OUTPUT);
   pinMode(IRLEDPin, OUTPUT);
@@ -118,9 +127,23 @@ void setup() {
   rmt_driver_install(rmt_cfg.channel, 16, 0);
 
 
+  //setup interrupts and atsk for IR receiver
   attachInterrupt(SensPin1, isr_sens_1, CHANGE);
   userScheduler.addTask(taskCheckIRBuffer);
   taskCheckIRBuffer.enable();
+
+  // initialize buttons
+  OKButton.begin(OKButtonPin);
+  OKButton.setPressedHandler(_on_OKButton_pressed);
+  OKButton.setReleasedHandler(_on_OKButton_released);
+
+  LeftButton.begin(LeftButtonPin);
+  LeftButton.setPressedHandler(_on_LeftButton_pressed);
+  LeftButton.setReleasedHandler(_on_LeftButton_released);
+
+  RightButton.begin(RightButtonPin);
+  RightButton.setPressedHandler(_on_RightButton_pressed);
+  RightButton.setReleasedHandler(_on_RightButton_released);
 }
 
 
@@ -192,6 +215,7 @@ uint16_t generate_ir_code() {
   return ircode;
 }
 
+
 void shoot() {
 
   T_lastShot = millis();
@@ -205,7 +229,7 @@ void shoot() {
   rmt_item32_t items[16];
 
   for(int i=0; i<16; i++) {
-    
+
     if(bitRead(ircode, i)) {items[15-i] = rmt_item_high;} 
     else {items[15-i] = rmt_item_low;}
   }
@@ -301,38 +325,52 @@ void check_all_ir_buffers() {
 
 
 void loop() {
-
   mesh.update();
-  
+  OKButton.loop();
+  LeftButton.loop();
+  RightButton.loop();
+}
 
-  if(digitalRead(LeftButtonPin) == LOW) {
-    Serial.println("Left");
+
+// OK
+void _on_OKButton_pressed(Button2& b) {
+  Serial.println("OK pressed");
+
+  if(millis() > T_lastShot+1000) {
+    Serial.println("Pew!");
+    shoot();
     lcd.clear();
-    lcd.print("left");
-    digitalWrite(BLUELEDPin, HIGH);
-  }
-  else {
-    digitalWrite(BLUELEDPin, LOW);
-  }
-
-
-  if(digitalRead(RightButtonPin) == LOW) {
-    Serial.println("Right");
-    lcd.clear();
-    lcd.print("right");
-  }
-  else {
-  }
-
-
-  if(digitalRead(OKButtonPin) == LOW) {
-    Serial.println("OK");
-
-    if(millis() > T_lastShot+1000) {
-      Serial.println("Pew!");
-      shoot();
-      lcd.clear();
-      lcd.print("ok");
-    }
+    lcd.print("ok");
   }
 }
+
+void _on_OKButton_released(Button2& b) {
+  Serial.println("Ok released");
+}
+
+
+// LEFT
+void _on_LeftButton_pressed(Button2& b) {
+  Serial.println("Left pressed");
+  lcd.clear();
+  lcd.print("left");
+  digitalWrite(BLUELEDPin, HIGH);
+}
+
+void _on_LeftButton_released(Button2& b) {
+  Serial.println("Left released");
+  digitalWrite(BLUELEDPin, LOW);
+}
+
+
+// RIGHT
+void _on_RightButton_pressed(Button2& b) {
+  Serial.println("Right pressed");
+}
+
+void _on_RightButton_released(Button2& b) {
+  Serial.println("Right released");
+}
+
+
+
