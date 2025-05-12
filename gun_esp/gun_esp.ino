@@ -7,6 +7,13 @@
 #include <Button2.h>
 
 
+typedef struct {
+  uint8_t id;
+  uint8_t teamid;
+  uint8_t hits = 0;
+} Player;
+
+
 #define Audio_RX_Pin GPIO_NUM_39
 #define Audio_TX_Pin GPIO_NUM_38
 
@@ -29,13 +36,9 @@
 #define   MESH_PASSWORD   "00000000"
 
 
-const uint8_t MY_ID = 13;
-
-bool limit_shots = false;
-bool do_gun_sound = true;
-int TOT_SHOTS = 0;
-int max_shots = 9999;
-bool do_pointer_led = true;
+uint8_t MY_ID;
+uint8_t PC_ID;
+Player players[128];
 
 
 Scheduler userScheduler;
@@ -45,9 +48,7 @@ DFRobotDFPlayerMini audio;
 SoftwareSerial AudioSerial(Audio_RX_Pin, Audio_TX_Pin);
 
 
-void sendMessage();
 void check_all_ir_buffers();
-Task taskSendMessage(TASK_SECOND * 1, TASK_FOREVER, &sendMessage);
 Task taskCheckIRBuffer(TASK_MILLISECOND*1, TASK_FOREVER, &check_all_ir_buffers);
 rmt_config_t rmt_cfg;
 static const rmt_item32_t rmt_item_high = {{{299, 1, 1, 0}}};
@@ -65,8 +66,17 @@ void _on_LeftButton_released(Button2& b);
 void _on_RightButton_released(Button2& b);
 
 
+uint8_t getNodeId() {
+  uint64_t mac = ESP.getEfuseMac();  // 48-bit MAC-Adresse
+  // XOR-Faltung auf 8 Bit
+  uint8_t id = (mac ^ (mac >> 8) ^ (mac >> 16) ^ (mac >> 24) ^ (mac >> 32) ^ (mac >> 40)) & 0xFF;
+  return id;
+}
+
 
 void setup() {
+  MY_ID = getNodeId();
+
   pinMode(BLUELEDPin, OUTPUT);
   pinMode(AUXLEDPin, OUTPUT);
   pinMode(IRLEDPin, OUTPUT);
@@ -82,25 +92,30 @@ void setup() {
 
   AudioSerial.begin(9600);
 
-  while (!audio.begin(AudioSerial, /*isACK = */ true, /*doReset = */ true)) {  //Use serial to communicate with mp3.
-    Serial.println("Audio Init Error");
-    lcd.clear();
-    lcd.print("Audio Init Error");
-  }
-  Serial.println("DFPlayer Mini online.");
-  lcd.clear();
-  lcd.print("Audio Online");
+  for(int i=0; i<10; i++) {
 
-  audio.volume(15);
-  audio.play(SOUND_PEW);
+    if(audio.begin(AudioSerial, true, true)) {
+      Serial.println("DFPlayer Mini online.");
+      lcd.clear();
+      lcd.print("Audio Online");
+
+      audio.volume(15);
+      audio.play(SOUND_PEW);
+      break;
+    }
+    else {
+      Serial.println("Audio Init Error.");
+      lcd.clear();
+      lcd.print("Audio Init Error");
+
+      delay(500);
+    }
+  }
 
   mesh.setDebugMsgTypes( ERROR | STARTUP );
   mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler);
   mesh.onReceive(&receivedCallback);
   mesh.onNewConnection(&newConnectionCallback);
-
-  userScheduler.addTask(taskSendMessage);
-  taskSendMessage.enable();
   mesh.onChangedConnections(&changedConnectionCallback);
   mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
 
@@ -153,21 +168,14 @@ unsigned long T_lastShot = 0;
 
 // MESH CODE
 
-void sendMessage() {
-  String msg = "Hi from node1";
-  msg += mesh.getNodeId();
-  mesh.sendBroadcast(msg);
-  taskSendMessage.setInterval( random( TASK_SECOND * 1, TASK_SECOND * 5 ));
-}
-
 
 void RFsend(char id, char cmd, char arg1 = 0, char arg2 = 0, char arg3 = 0, char arg4 = 0, char arg5 = 0) {
-  //mesh.sendBroadcast(id, cmd, arg1, arg2, arg3, arg4, arg5);
+  mesh.sendBroadcast({id, cmd, arg1, arg2, arg3, arg4, arg5});
 }
 
 
 void receivedCallback( uint32_t from, String &msg ) {
-  Serial.printf("startHere: Received from %u msg=%s\n", from, msg.c_str());
+  Serial.printf("Received from %u msg=%s\n", from, msg.c_str());
 }
 
 void newConnectionCallback(uint32_t nodeId) {
