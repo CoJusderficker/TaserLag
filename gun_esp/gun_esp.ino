@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <driver/rmt.h>
 #include <Button2.h>
+#include <ArduinoJson.h>
 
 
 typedef struct {
@@ -12,6 +13,41 @@ typedef struct {
   uint8_t teamid;
   uint8_t hits = 0;
 } Player;
+
+
+enum Commands {
+  CMD_PING,
+  CMD_ACK,
+  CMD_CHANGE_GR,
+  CMD_START_TIMER,
+  CMD_SEND_PLAYER_DATA,
+  CMD_REQUEST_DATA,
+  CMD_GAME_OVER,
+  CMD_PLAYER_DATA_FINISHED,
+  CMD_RESPAWN
+};
+
+enum IDs {
+  ID_PC,
+  ID_ALL,
+  ID_ALL_PLAYERS
+};
+
+enum Gamerules {
+  GR_LCD_Backlight,
+  GR_Deadtime_s,
+  GR_Friendly_Fire,
+  GR_DoGunSound,
+  GR_DoPointerLED,
+  GR_maxDeaths,
+  GR_maxShots,
+  GR_limitShots,
+  GR_RespawnMode,
+  GR_StandardDamage,
+  GR_StandardResistance,
+  GR_DoRegeneration,
+  GR_RegenerationSpeed
+};
 
 
 #define Audio_RX_Pin GPIO_NUM_39
@@ -36,9 +72,8 @@ typedef struct {
 #define   MESH_PASSWORD   "00000000"
 
 
-uint8_t MY_ID;
-uint8_t PC_ID;
 Player players[128];
+uint8_t MY_ID;
 
 
 Scheduler userScheduler;
@@ -159,6 +194,9 @@ void setup() {
   RightButton.begin(RightButtonPin);
   RightButton.setPressedHandler(_on_RightButton_pressed);
   RightButton.setReleasedHandler(_on_RightButton_released);
+
+  lcd.clear();
+  lcd.print("Waiting for timer command");
 }
 
 
@@ -169,13 +207,55 @@ unsigned long T_lastShot = 0;
 // MESH CODE
 
 
-void RFsend(char id, char cmd, char arg1 = 0, char arg2 = 0, char arg3 = 0, char arg4 = 0, char arg5 = 0) {
-  mesh.sendBroadcast({id, cmd, arg1, arg2, arg3, arg4, arg5});
+void RFsend(uint8_t id, uint8_t cmd, uint8_t arg1 = 0, uint8_t arg2 = 0, uint8_t arg3 = 0, uint8_t arg4 = 0, uint8_t arg5 = 0) {
+  
+  JsonDocument msg;
+  msg["id"] = id;
+  msg["cmd"] = cmd;
+  msg["arg1"] = arg1;
+  msg["arg2"] = arg2;
+  msg["arg3"] = arg3;
+  msg["arg4"] = arg4;
+  msg["arg5"] = arg5;
+  
+  String JsonString;
+  serializeJson(msg, JsonString);
+
+  mesh.sendBroadcast(JsonString);
 }
 
 
-void receivedCallback( uint32_t from, String &msg ) {
-  Serial.printf("Received from %u msg=%s\n", from, msg.c_str());
+void receivedCallback( uint32_t from, String &json ) {
+  Serial.printf("Received from %u msg=%s\n", from, json.c_str());
+
+  JsonDocument msg;
+  deserializeJson(msg, json);
+  
+  uint8_t id = msg["id"].as<uint8_t>();
+  uint8_t cmd = msg["cmd"].as<uint8_t>();
+  uint8_t arg1 = msg["arg1"].as<uint8_t>();
+  uint8_t arg2 = msg["arg2"].as<uint8_t>();
+  uint8_t arg3 = msg["arg3"].as<uint8_t>();
+  uint8_t arg4 = msg["arg4"].as<uint8_t>();
+  uint8_t arg5 = msg["arg5"].as<uint8_t>();
+
+  if(!(id == MY_ID || id == ALL || id == ALL_PLAYERS)) {return;} // not meant
+
+  switch(cmd) {
+
+    case CMD_PING:
+      RFsend(ID_PC, CMD_ACK);
+      break;
+    
+    case CMD_START_TIMER:
+
+      for(int i=arg1, i>0; i--) {
+        lcd.clear();
+        lcd.print(i);
+        delay(1000);
+      }
+      block_init = false;
+  }
 }
 
 void newConnectionCallback(uint32_t nodeId) {
@@ -187,7 +267,7 @@ void changedConnectionCallback() {
 }
 
 void nodeTimeAdjustedCallback(int32_t offset) {
-    Serial.printf("Adjusted time %u. Offset = %d\n", mesh.getNodeTime(),offset);
+  Serial.printf("Adjusted time %u. Offset = %d\n", mesh.getNodeTime(), offset);
 }
 
 
@@ -376,6 +456,7 @@ void _on_LeftButton_released(Button2& b) {
 
 // RIGHT
 void _on_RightButton_pressed(Button2& b) {
+  RFsend(ALL, PING);
   Serial.println("Right pressed");
 }
 
