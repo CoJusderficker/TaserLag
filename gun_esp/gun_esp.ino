@@ -50,6 +50,14 @@ enum Gamerules {
 };
 
 
+enum STATES {
+  initializing,
+  waiting_for_timer,
+  countdown,
+  active_game
+}; STATES state = initializing;
+
+
 #define Audio_RX_Pin GPIO_NUM_39
 #define Audio_TX_Pin GPIO_NUM_38
 
@@ -74,6 +82,10 @@ enum Gamerules {
 
 Player players[128];
 uint8_t MY_ID;
+
+
+uint8_t TEAM = 0;
+int Health = 500;
 
 
 Scheduler userScheduler;
@@ -195,8 +207,54 @@ void setup() {
   RightButton.setPressedHandler(_on_RightButton_pressed);
   RightButton.setReleasedHandler(_on_RightButton_released);
 
+  state = waiting_for_timer;
   lcd.clear();
   lcd.print("Waiting for timer command");
+
+  while(state == waiting_for_timer) {
+    mesh.update();
+  }
+  Serial.println("Exited setup function");
+}
+
+
+void update_health_bar() {
+
+  if(Health <= 0) {die();}
+
+  // update health blocks
+  lcd.rightToLeft();
+  lcd.setCursor(15, 0);
+  lcd.print("        ");
+  lcd.setCursor(15, 0);
+
+  int blocks = (8 * Health) / 500;
+
+  for (int i = 0; i < blocks; i++) {
+    lcd.write(0xFF);
+  }
+  lcd.leftToRight();
+}
+
+
+void start_game() {
+
+  lcd.clear();
+
+  lcd.setCursor(0, 1);
+  lcd.print("#");
+  lcd.print(MY_ID, HEX);
+
+  lcd.setCursor(9, 1);
+  lcd.print("TEAM ");
+  lcd.print(TEAM, HEX);
+
+  lcd.setCursor(0, 0);
+  lcd.print("Alive");
+
+  state = active_game;
+
+  update_health_bar();
 }
 
 
@@ -239,7 +297,7 @@ void receivedCallback( uint32_t from, String &json ) {
   uint8_t arg4 = msg["arg4"].as<uint8_t>();
   uint8_t arg5 = msg["arg5"].as<uint8_t>();
 
-  if(!(id == MY_ID || id == ALL || id == ALL_PLAYERS)) {return;} // not meant
+  if(!(id == MY_ID || id == ID_ALL || id == ID_ALL_PLAYERS)) {return;} // not meant
 
   switch(cmd) {
 
@@ -249,12 +307,13 @@ void receivedCallback( uint32_t from, String &json ) {
     
     case CMD_START_TIMER:
 
-      for(int i=arg1, i>0; i--) {
+      for(int i=arg1; i>0; i--) {
         lcd.clear();
         lcd.print(i);
         delay(1000);
       }
-      block_init = false;
+      start_game();
+      break;
   }
 }
 
@@ -396,6 +455,8 @@ void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
 
     if(calc_checksum == recv_checksum) {
       Serial.println("Hit!");
+      Health -= 100;
+      update_health_bar();
     }
     else {
       Serial.println("CS dont match");
@@ -410,6 +471,10 @@ void check_all_ir_buffers() {
   analyzeBuffer(changes_1, &changes_1_size);
 }
 
+
+void die() {
+  lcd.noBacklight();
+}
 
 
 void loop() {
@@ -456,7 +521,7 @@ void _on_LeftButton_released(Button2& b) {
 
 // RIGHT
 void _on_RightButton_pressed(Button2& b) {
-  RFsend(ALL, PING);
+  RFsend(ID_ALL, CMD_PING);
   Serial.println("Right pressed");
 }
 
