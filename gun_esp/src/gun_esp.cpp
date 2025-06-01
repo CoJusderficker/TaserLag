@@ -90,6 +90,14 @@ void _on_LeftButton_released(Button2& b);
 void _on_RightButton_released(Button2& b);
 void _on_TriggerButton_pressed(Button2& b);
 
+void receivedCallback( uint32_t from, String &json );
+void newConnectionCallback(uint32_t nodeId);
+void changedConnectionCallback();
+void nodeTimeAdjustedCallback(int32_t offset);
+
+void start_game();
+void die();
+void hit(uint8_t culprit_id);
 
 uint8_t getNodeId() {
   uint64_t mac = ESP.getEfuseMac();  // 48-bit MAC-Adresse
