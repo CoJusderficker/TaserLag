@@ -8,23 +8,12 @@
 #include <ArduinoJson.h>
 
 
-typedef struct {
-  uint8_t id;
-  uint8_t teamid;
-  uint8_t hits = 0;
-} Player;
-
-
 enum Commands {
   CMD_PING,
   CMD_ACK,
-  CMD_CHANGE_GR,
   CMD_START_TIMER,
-  CMD_SEND_PLAYER_DATA,
-  CMD_REQUEST_DATA,
-  CMD_GAME_OVER,
-  CMD_PLAYER_DATA_FINISHED,
-  CMD_RESPAWN
+  CMD_HIT_EVENT,
+  CMD_END_GAME
 };
 
 enum IDs {
@@ -34,19 +23,6 @@ enum IDs {
 };
 
 enum Gamerules {
-  GR_LCD_Backlight,
-  GR_Deadtime_s,
-  GR_Friendly_Fire,
-  GR_DoGunSound,
-  GR_DoPointerLED,
-  GR_maxDeaths,
-  GR_maxShots,
-  GR_limitShots,
-  GR_RespawnMode,
-  GR_StandardDamage,
-  GR_StandardResistance,
-  GR_DoRegeneration,
-  GR_RegenerationSpeed
 };
 
 
@@ -54,7 +30,8 @@ enum STATES {
   initializing,
   waiting_for_timer,
   countdown,
-  active_game
+  active_game,
+  game_ended
 }; STATES state = initializing;
 
 
@@ -64,6 +41,7 @@ enum STATES {
 #define LeftButtonPin GPIO_NUM_21
 #define RightButtonPin GPIO_NUM_48
 #define OKButtonPin GPIO_NUM_47
+#define TriggerPin GPIO_NUM_4
 
 #define IRLEDPin GPIO_NUM_42
 #define BLUELEDPin GPIO_NUM_41
@@ -80,12 +58,10 @@ enum STATES {
 #define   MESH_PASSWORD   "00000000"
 
 
-Player players[128];
 uint8_t MY_ID;
-
-
 uint8_t TEAM = 0;
 int Health = 500;
+int deadtime_s = 5;
 
 
 Scheduler userScheduler;
@@ -105,12 +81,14 @@ void isr_sens_1();
 Button2 OKButton;
 Button2 LeftButton;
 Button2 RightButton;
+Button2 TriggerButton;
 void _on_OKButton_pressed(Button2& b);
 void _on_LeftButton_pressed(Button2& b);
 void _on_RightButton_pressed(Button2& b);
 void _on_OKButton_released(Button2& b);
 void _on_LeftButton_released(Button2& b);
 void _on_RightButton_released(Button2& b);
+void _on_TriggerButton_pressed(Button2& b);
 
 
 uint8_t getNodeId() {
@@ -130,7 +108,7 @@ void setup() {
 
   pinMode(SensPin1, INPUT_PULLUP);
 
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   
   lcd.init();               
@@ -207,12 +185,23 @@ void setup() {
   RightButton.setPressedHandler(_on_RightButton_pressed);
   RightButton.setReleasedHandler(_on_RightButton_released);
 
+  TriggerButton.begin(TriggerPin);
+  TriggerButton.setPressedHandler(_on_TriggerButton_pressed);
+
   state = waiting_for_timer;
   lcd.clear();
   lcd.print("Waiting for timer command");
 
   while(state == waiting_for_timer) {
     mesh.update();
+    OKButton.loop();
+
+    if(OKButton.isPressed()) {
+      lcd.clear();
+      lcd.print("skipped");
+      start_game();
+      break;
+    }
   }
   Serial.println("Exited setup function");
 }
@@ -314,6 +303,11 @@ void receivedCallback( uint32_t from, String &json ) {
       }
       start_game();
       break;
+    
+    case CMD_END_GAME:
+      state = game_ended;
+      lcd.clear();
+      lcd.print("Game Over!");
   }
 }
 
@@ -366,6 +360,7 @@ uint16_t generate_ir_code() {
 void shoot() {
 
   T_lastShot = millis();
+  audio.play(SOUND_PEW);
 
   digitalWrite(BLUELEDPin, HIGH);
   
@@ -382,6 +377,8 @@ void shoot() {
   }
   rmt_write_items(rmt_cfg.channel, items, 16, false);
   Serial.println("Sent.");
+
+  delay(500);
 
   digitalWrite(BLUELEDPin, LOW);
 }
@@ -453,10 +450,10 @@ void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
     uint8_t calc_checksum = countBits(0b1111111110000011 & sequence);
     uint8_t recv_checksum = (sequence & 0b0000000001111100) >> 2;
 
+    uint8_t culprit_id = (sequence & 0b0111111110000000) >> 7;
+
     if(calc_checksum == recv_checksum) {
-      Serial.println("Hit!");
-      Health -= 100;
-      update_health_bar();
+      hit(culprit_id);
     }
     else {
       Serial.println("CS dont match");
@@ -472,8 +469,44 @@ void check_all_ir_buffers() {
 }
 
 
+void hit(uint8_t culprit_id) {
+  Serial.println("Hit!");
+  Health -= 100;
+  update_health_bar();
+  RFsend(ID_PC, CMD_HIT_EVENT, culprit_id, MY_ID);
+}
+
+
+uint32_t T_died = 0;
 void die() {
+  Health = 0;
+
+  lcd.setCursor(0, 0);
+  lcd.print("Dead");
   lcd.noBacklight();
+
+  T_died = millis();
+}
+
+
+void respawn() {
+
+  Health = 500;
+
+  lcd.clear();
+
+  lcd.setCursor(0, 1);
+  lcd.print("#");
+  lcd.print(MY_ID, HEX);
+
+  lcd.setCursor(9, 1);
+  lcd.print("TEAM ");
+  lcd.print(TEAM, HEX);
+
+  lcd.setCursor(0, 0);
+  lcd.print("Alive");
+
+  update_health_bar();
 }
 
 
@@ -482,6 +515,11 @@ void loop() {
   OKButton.loop();
   LeftButton.loop();
   RightButton.loop();
+  TriggerButton.loop();
+
+  if(Health <= 0  &&  millis() - T_died > deadtime_s * 1000) {
+    respawn();
+  }
 }
 
 
@@ -491,13 +529,8 @@ void loop() {
 // OK
 void _on_OKButton_pressed(Button2& b) {
   Serial.println("OK pressed");
-
-  if(millis() > T_lastShot+1000) {
-    Serial.println("Pew!");
-    shoot();
-    lcd.clear();
-    lcd.print("ok");
-  }
+  lcd.clear();
+  lcd.print("ok");
 }
 
 void _on_OKButton_released(Button2& b) {
@@ -530,4 +563,10 @@ void _on_RightButton_released(Button2& b) {
 }
 
 
-
+// TRIGGER
+void _on_TriggerButton_pressed(Button2& b) {
+  if(millis() > T_lastShot+1000) {
+    Serial.println("Pew!");
+    shoot();
+  }
+}

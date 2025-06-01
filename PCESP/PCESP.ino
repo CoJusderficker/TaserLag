@@ -13,13 +13,9 @@ typedef struct {
 enum Commands {
   CMD_PING,
   CMD_ACK,
-  CMD_CHANGE_GR,
   CMD_START_TIMER,
-  CMD_SEND_PLAYER_DATA,
-  CMD_REQUEST_DATA,
-  CMD_GAME_OVER,
-  CMD_PLAYER_DATA_FINISHED,
-  CMD_RESPAWN
+  CMD_HIT_EVENT,
+  CMD_END_GAME
 };
 
 enum IDs {
@@ -29,19 +25,6 @@ enum IDs {
 };
 
 enum Gamerules {
-  GR_LCD_Backlight,
-  GR_Deadtime_s,
-  GR_Friendly_Fire,
-  GR_DoGunSound,
-  GR_DoPointerLED,
-  GR_maxDeaths,
-  GR_maxShots,
-  GR_limitShots,
-  GR_RespawnMode,
-  GR_StandardDamage,
-  GR_StandardResistance,
-  GR_DoRegeneration,
-  GR_RegenerationSpeed
 };
 
 
@@ -132,16 +115,28 @@ void loop() {
   if(Serial.available()) {
     char data = Serial.read();
 
-    if(data == 'a') {
-      Serial.println("starting game");
+    switch(data) {
 
+    case 'a': {
+      RFsend(ID_ALL, CMD_START_TIMER, 10);
+      Serial.println("Sent Start Command");
+      break;
+    }
+    
+    case 'b': {
       std::list<uint32_t>members = mesh.getNodeList();
-      
-      for(int node : members) {
+      for(uint32_t node : members) {
         Serial.println(node);
       }
+      break;
+    }
+    
+    case 'c': {
+      RFsend(ID_ALL, CMD_END_GAME);
+      Serial.println("game ended command sent")
+      break;
+    }
 
-      RFsend(ID_ALL, CMD_START_TIMER, 10);
     }
   }
 }
