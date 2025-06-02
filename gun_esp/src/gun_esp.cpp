@@ -1,30 +1,11 @@
+#include "buttons.h"
+#include "config.h"
+#include "funk.h"
+#include "infrared.h"
+#include "sound.h"
 #include <LiquidCrystal_I2C.h>
-#include <DFRobotDFPlayerMini.h>  // has to be 1.0.5, newer will get stuck on play()!!!
-#include <SoftwareSerial.h>
-#include <painlessMesh.h>
-#include <Arduino.h>
-#include <driver/rmt.h>
-#include <Button2.h>
-#include <ArduinoJson.h>
 
-
-enum Commands {
-  CMD_PING,
-  CMD_ACK,
-  CMD_START_TIMER,
-  CMD_HIT_EVENT,
-  CMD_END_GAME
-};
-
-enum IDs {
-  ID_PC,
-  ID_ALL,
-  ID_ALL_PLAYERS
-};
-
-enum Gamerules {
-};
-
+enum Gamerules {};
 
 enum STATES {
   initializing,
@@ -32,179 +13,97 @@ enum STATES {
   countdown,
   active_game,
   game_ended
-}; STATES state = initializing;
-
-
-#define Audio_RX_Pin GPIO_NUM_39
-#define Audio_TX_Pin GPIO_NUM_38
-
-#define LeftButtonPin GPIO_NUM_21
-#define RightButtonPin GPIO_NUM_48
-#define OKButtonPin GPIO_NUM_47
-#define TriggerPin GPIO_NUM_4
-
-#define IRLEDPin GPIO_NUM_42
-#define BLUELEDPin GPIO_NUM_41
-#define AUXLEDPin GPIO_NUM_40
-
-#define SensPin1 GPIO_NUM_6
-
-
-#define SOUND_NO_MORE_SHOTS 2
-#define SOUND_PEW 3
-
-
-#define   MESH_PREFIX     "LasertagMesh"
-#define   MESH_PASSWORD   "00000000"
-
+};
+STATES state = initializing;
 
 uint8_t MY_ID;
 uint8_t TEAM = 0;
 int Health = 500;
 int deadtime_s = 5;
-
+unsigned long T_lastShot = 0;
 
 Scheduler userScheduler;
-painlessMesh mesh;
-LiquidCrystal_I2C lcd(0x27, 16, 2);  
-DFRobotDFPlayerMini audio;
-SoftwareSerial AudioSerial(Audio_RX_Pin, Audio_TX_Pin);
-
-
-void check_all_ir_buffers();
-Task taskCheckIRBuffer(TASK_MILLISECOND*1, TASK_FOREVER, &check_all_ir_buffers);
-rmt_config_t rmt_cfg;
-static const rmt_item32_t rmt_item_high = {{{299, 1, 1, 0}}};
-static const rmt_item32_t rmt_item_low = {{{299, 0, 1, 0}}};
-void isr_sens_1();
-
-Button2 OKButton;
-Button2 LeftButton;
-Button2 RightButton;
-Button2 TriggerButton;
-void _on_OKButton_pressed(Button2& b);
-void _on_LeftButton_pressed(Button2& b);
-void _on_RightButton_pressed(Button2& b);
-void _on_OKButton_released(Button2& b);
-void _on_LeftButton_released(Button2& b);
-void _on_RightButton_released(Button2& b);
-void _on_TriggerButton_pressed(Button2& b);
-
-void receivedCallback( uint32_t from, String &json );
-void newConnectionCallback(uint32_t nodeId);
-void changedConnectionCallback();
-void nodeTimeAdjustedCallback(int32_t offset);
+Task task_ir_buffer(TASK_MILLISECOND * 1, TASK_FOREVER, &infrared::spin_rx);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 void start_game();
 void die();
-void hit(uint8_t culprit_id);
-
-uint8_t getNodeId() {
-  uint64_t mac = ESP.getEfuseMac();  // 48-bit MAC-Adresse
-  // XOR-Faltung auf 8 Bit
-  uint8_t id = (mac ^ (mac >> 8) ^ (mac >> 16) ^ (mac >> 24) ^ (mac >> 32) ^ (mac >> 40)) & 0xFF;
-  return id;
-}
-
+void shoot();
+uint8_t getNodeId();
 
 void setup() {
   MY_ID = getNodeId();
 
-  pinMode(BLUELEDPin, OUTPUT);
-  pinMode(AUXLEDPin, OUTPUT);
-  pinMode(IRLEDPin, OUTPUT);
+  pinMode(PIN_LED_BLUE, OUTPUT);
+  pinMode(PIN_LED_AUX, OUTPUT);
+  pinMode(PIN_LED_IR, OUTPUT);
 
-  pinMode(SensPin1, INPUT_PULLUP);
+  pinMode(PIN_IR_RX, INPUT_PULLUP);
 
   Serial.begin(115200);
 
-  
-  lcd.init();               
+  lcd.init();
   lcd.backlight();
   lcd.print("LCD initialized.");
 
-  AudioSerial.begin(9600);
-
-  for(int i=0; i<10; i++) {
-
-    if(audio.begin(AudioSerial, true, true)) {
-      Serial.println("DFPlayer Mini online.");
-      lcd.clear();
-      lcd.print("Audio Online");
-
-      audio.volume(15);
-      audio.play(SOUND_PEW);
-      break;
-    }
-    else {
-      Serial.println("Audio Init Error.");
-      lcd.clear();
-      lcd.print("Audio Init Error");
-
-      delay(500);
-    }
-  }
-
-  mesh.setDebugMsgTypes( ERROR | STARTUP );
-  mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler);
-  mesh.onReceive(&receivedCallback);
-  mesh.onNewConnection(&newConnectionCallback);
-  mesh.onChangedConnections(&changedConnectionCallback);
-  mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
-
-  Serial.println("Mesh Done");
+  buttons::init();
+  Serial.println("Buttons Init");
+  sound::setup();
+  Serial.println("sound Init");
+  sound::play(SOUND_STARTUP);
+  infrared::init();
+  Serial.println("Infrared Init");
+  funk::begin(&userScheduler);
+  Serial.println("Mesh Init");
 
   lcd.clear();
-  lcd.print("RMT IR...");
+  lcd.print("Systems Online");
 
-  //configure rmt and install driver
-  rmt_cfg.channel = RMT_CHANNEL_0;
-  rmt_cfg.rmt_mode = RMT_MODE_TX;
-  rmt_cfg.gpio_num = IRLEDPin;
-  rmt_cfg.mem_block_num = 1;
-  rmt_cfg.clk_div = 80; // 1 unit = 1 usec
-  
-  rmt_cfg.tx_config.carrier_duty_percent = 50;
-  rmt_cfg.tx_config.carrier_en = true;
-  rmt_cfg.tx_config.loop_en = false;
-  rmt_cfg.tx_config.carrier_freq_hz = 38000;
-  rmt_cfg.tx_config.carrier_level = RMT_CARRIER_LEVEL_HIGH;
-  rmt_cfg.tx_config.idle_output_en = false;
+  buttons::get_button(buttons::OK).setClickHandler([&](Button2 btn) {
+    Serial.print("OK clicked");
+    // TODO u sure?
+    lcd.clear();
+    lcd.print("ok");
+  });
 
-  rmt_config(&rmt_cfg);
-  rmt_driver_install(rmt_cfg.channel, 16, 0);
+  buttons::get_button(buttons::LEFT).setChangedHandler([&](Button2 btn) {
+    if (btn.isPressed()) {
+      Serial.print("LEFT pressed");
+      lcd.clear();
+      lcd.print("left");
+      digitalWrite(PIN_LED_BLUE, HIGH);
+    } else {
+      Serial.print("LEFT released");
 
+      digitalWrite(PIN_LED_BLUE, LOW);
+    }
+  });
 
-  //setup interrupts and atsk for IR receiver
-  attachInterrupt(SensPin1, isr_sens_1, CHANGE);
-  userScheduler.addTask(taskCheckIRBuffer);
-  taskCheckIRBuffer.enable();
+  buttons::get_button(buttons::RIGHT).setClickHandler([&](Button2 btn) {
+    Serial.print("RIGHT clicked");
+    funk::send(ID_ALL, CMD_PING);
+  });
 
-  // initialize buttons
-  OKButton.begin(OKButtonPin);
-  OKButton.setPressedHandler(_on_OKButton_pressed);
-  OKButton.setReleasedHandler(_on_OKButton_released);
+  buttons::get_button(buttons::TRIGGER).setPressedHandler([&](Button2 btn) {
+    Serial.print("TRIGGER pressed");
+    if (millis() > T_lastShot + 1000) {
+      Serial.println("Pew!");
+      shoot();
+    }
+  });
 
-  LeftButton.begin(LeftButtonPin);
-  LeftButton.setPressedHandler(_on_LeftButton_pressed);
-  LeftButton.setReleasedHandler(_on_LeftButton_released);
-
-  RightButton.begin(RightButtonPin);
-  RightButton.setPressedHandler(_on_RightButton_pressed);
-  RightButton.setReleasedHandler(_on_RightButton_released);
-
-  TriggerButton.begin(TriggerPin);
-  TriggerButton.setPressedHandler(_on_TriggerButton_pressed);
+  userScheduler.addTask(task_ir_buffer);
+  task_ir_buffer.enable();
 
   state = waiting_for_timer;
   lcd.clear();
   lcd.print("Waiting for timer command");
 
-  while(state == waiting_for_timer) {
-    mesh.update();
-    OKButton.loop();
+  while (state == waiting_for_timer) {
+    funk::spin();
+    buttons::spin_only(buttons::OK);
 
-    if(OKButton.isPressed()) {
+    if (buttons::get_button(buttons::OK).isPressed()) {
       lcd.clear();
       lcd.print("skipped");
       start_game();
@@ -214,10 +113,20 @@ void setup() {
   Serial.println("Exited setup function");
 }
 
+uint8_t getNodeId() {
+  uint64_t mac = ESP.getEfuseMac(); // 48-bit MAC-Adresse
+  // XOR-Faltung auf 8 Bit
+  uint8_t id = (mac ^ (mac >> 8) ^ (mac >> 16) ^ (mac >> 24) ^ (mac >> 32) ^
+                (mac >> 40)) &
+               0xFF;
+  return id;
+}
 
 void update_health_bar() {
 
-  if(Health <= 0) {die();}
+  if (Health <= 0) {
+    die();
+  }
 
   // update health blocks
   lcd.rightToLeft();
@@ -232,7 +141,6 @@ void update_health_bar() {
   }
   lcd.leftToRight();
 }
-
 
 void start_game() {
 
@@ -254,38 +162,12 @@ void start_game() {
   update_health_bar();
 }
 
-
-unsigned long T_lastShot = 0;
-
-
-
-// MESH CODE
-
-
-void RFsend(uint8_t id, uint8_t cmd, uint8_t arg1 = 0, uint8_t arg2 = 0, uint8_t arg3 = 0, uint8_t arg4 = 0, uint8_t arg5 = 0) {
-  
-  JsonDocument msg;
-  msg["id"] = id;
-  msg["cmd"] = cmd;
-  msg["arg1"] = arg1;
-  msg["arg2"] = arg2;
-  msg["arg3"] = arg3;
-  msg["arg4"] = arg4;
-  msg["arg5"] = arg5;
-  
-  String JsonString;
-  serializeJson(msg, JsonString);
-
-  mesh.sendBroadcast(JsonString);
-}
-
-
-void receivedCallback( uint32_t from, String &json ) {
+void funk::rx_callback(uint32_t from, String &json) {
   Serial.printf("Received from %u msg=%s\n", from, json.c_str());
 
   JsonDocument msg;
   deserializeJson(msg, json);
-  
+
   uint8_t id = msg["id"].as<uint8_t>();
   uint8_t cmd = msg["cmd"].as<uint8_t>();
   uint8_t arg1 = msg["arg1"].as<uint8_t>();
@@ -294,196 +176,53 @@ void receivedCallback( uint32_t from, String &json ) {
   uint8_t arg4 = msg["arg4"].as<uint8_t>();
   uint8_t arg5 = msg["arg5"].as<uint8_t>();
 
-  if(!(id == MY_ID || id == ID_ALL || id == ID_ALL_PLAYERS)) {return;} // not meant
+  if (!(id == MY_ID || id == ID_ALL || id == ID_ALL_PLAYERS)) {
+    return;
+  } // not meant
 
-  switch(cmd) {
+  switch (cmd) {
 
-    case CMD_PING:
-      RFsend(ID_PC, CMD_ACK);
-      break;
-    
-    case CMD_START_TIMER:
+  case CMD_PING:
+    funk::send(ID_PC, CMD_ACK);
+    break;
 
-      for(int i=arg1; i>0; i--) {
-        lcd.clear();
-        lcd.print(i);
-        delay(1000);
-      }
-      start_game();
-      break;
-    
-    case CMD_END_GAME:
-      state = game_ended;
+  case CMD_START_TIMER:
+
+    for (int i = arg1; i > 0; i--) {
       lcd.clear();
-      lcd.print("Game Over!");
+      lcd.print(i);
+      delay(1000);
+    }
+    start_game();
+    break;
+
+  case CMD_END_GAME:
+    state = game_ended;
+    lcd.clear();
+    lcd.print("Game Over!");
   }
 }
-
-void newConnectionCallback(uint32_t nodeId) {
-  Serial.printf("--> startHere: New Connection, nodeId = %u\n", nodeId);
-}
-
-void changedConnectionCallback() {
-  Serial.printf("Changed connections\n");
-}
-
-void nodeTimeAdjustedCallback(int32_t offset) {
-  Serial.printf("Adjusted time %u. Offset = %d\n", mesh.getNodeTime(), offset);
-}
-
-
-
-// IR CODE
-
-
-
-uint16_t generate_ir_code() {
-  // returns message for shooting.
-  // P: playerid, C: checksum
-  // structure: 0b 1PPP PPPP PCCC CC01 (starts with 1 and ends with 01)
-
-  // first, make frame:
-  uint16_t ircode = 0b1000000000000001;
-
-  // append playerid with space for 5 bits cs and 2 bits ending
-  ircode += MY_ID << 7;
-
-  // generate checksum
-  uint8_t checksum = 0;
-  for(int i=0; i<16; i++) {
-    
-    if(bitRead(ircode, i)) {checksum++;}
-  }
-
-  // write checksum in ircode
-  ircode += checksum << 2;
-
-  Serial.print("Ir Code Generated: ");
-  Serial.println(ircode, BIN);
-
-  return ircode;
-}
-
 
 void shoot() {
-
   T_lastShot = millis();
-  audio.play(SOUND_PEW);
+  sound::play(SOUND_PEW);
 
-  digitalWrite(BLUELEDPin, HIGH);
-  
-  uint16_t ircode = generate_ir_code();
+  digitalWrite(PIN_LED_BLUE, HIGH);
 
-
-  // turn uint16 to array of rmt items.
-  rmt_item32_t items[16];
-
-  for(int i=0; i<16; i++) {
-
-    if(bitRead(ircode, i)) {items[15-i] = rmt_item_high;} 
-    else {items[15-i] = rmt_item_low;}
-  }
-  rmt_write_items(rmt_cfg.channel, items, 16, false);
+  infrared::blast(MY_ID);
   Serial.println("Sent.");
 
   delay(500);
 
-  digitalWrite(BLUELEDPin, LOW);
+  digitalWrite(PIN_LED_BLUE, LOW);
 }
 
-
-uint32_t changes_1[32] = {};
-size_t changes_1_size = 0;
-
-
-// log changes of sens pin
-void IRAM_ATTR isr_sens_1() {
-  changes_1[changes_1_size] = micros();
-  changes_1_size++;
-}
-
-
-uint8_t countBits(uint16_t n) {
-    uint8_t count = 0;
-    while (n) {
-        n &= (n - 1);  // delete least-significant bit
-        count++;
-    }
-    return count;
-}
-
-
-// analyses IR buffer and determines, whether i was shot
-void analyzeBuffer(uint32_t* buffer, size_t* buffer_size) {
-
-  // if buffer is not empty and first entry is older than 10ms, analyse
-  if(buffer[0] && micros() - buffer[0] >= 10000) {
-
-    // 1st: check for time diff under 150us -> error
-    for(size_t i = 1; i < *buffer_size; i++) {
-      if(buffer[i] - buffer[i - 1] < 150) {
-        Serial.println("Too tight timing.");
-        return;
-      }
-    }
-    Serial.println("timing ok.");
-
-    // generate binary sequence from timestamps
-    uint16_t sequence;
-    uint8_t bit = 0;
-    bool state = true;
-
-    for(size_t i = 1; i < *buffer_size; i++) {  // read out data
-      int diff = buffer[i] - buffer[i - 1];
-      int nearest_multiple = round(diff / 300.0);  // find nearest multiple to 300usec -> append that many digits
-      
-      for(int j = 0; j < nearest_multiple; j++) {  // append
-        if (bit < 16) {  // prevent overflow
-
-          bitWrite(sequence, 15-bit, state);
-          bit++;
-        }
-      }
-      state = !state;
-    }
-    Serial.print("Received Ir Sequence: ");
-    Serial.println(sequence, BIN);
-    
-    Serial.println("Clear buffer...");
-    memset(buffer, 0, (*buffer_size) * sizeof(uint32_t)); // clear array
-    *buffer_size = 0;
-
-    // validate checksum
-
-    uint8_t calc_checksum = countBits(0b1111111110000011 & sequence);
-    uint8_t recv_checksum = (sequence & 0b0000000001111100) >> 2;
-
-    uint8_t culprit_id = (sequence & 0b0111111110000000) >> 7;
-
-    if(calc_checksum == recv_checksum) {
-      hit(culprit_id);
-    }
-    else {
-      Serial.println("CS dont match");
-    }
-
-  }
-}
-
-
-void check_all_ir_buffers() {
-
-  analyzeBuffer(changes_1, &changes_1_size);
-}
-
-
-void hit(uint8_t culprit_id) {
+void infrared::got_blasted(uint8_t from_player_id) {
   Serial.println("Hit!");
   Health -= 100;
   update_health_bar();
-  RFsend(ID_PC, CMD_HIT_EVENT, culprit_id, MY_ID);
+  funk::send(ID_PC, CMD_HIT_EVENT, from_player_id, MY_ID);
 }
-
 
 uint32_t T_died = 0;
 void die() {
@@ -495,7 +234,6 @@ void die() {
 
   T_died = millis();
 }
-
 
 void respawn() {
 
@@ -517,64 +255,11 @@ void respawn() {
   update_health_bar();
 }
 
-
 void loop() {
-  mesh.update();
-  OKButton.loop();
-  LeftButton.loop();
-  RightButton.loop();
-  TriggerButton.loop();
+  funk::spin();
+  buttons::spin();
 
-  if(Health <= 0  &&  millis() - T_died > deadtime_s * 1000) {
+  if (Health <= 0 && millis() - T_died > deadtime_s * 1000) {
     respawn();
-  }
-}
-
-
-// BUTTON CODE STARTS HERE
-
-
-// OK
-void _on_OKButton_pressed(Button2& b) {
-  Serial.println("OK pressed");
-  lcd.clear();
-  lcd.print("ok");
-}
-
-void _on_OKButton_released(Button2& b) {
-  Serial.println("Ok released");
-}
-
-
-// LEFT
-void _on_LeftButton_pressed(Button2& b) {
-  Serial.println("Left pressed");
-  lcd.clear();
-  lcd.print("left");
-  digitalWrite(BLUELEDPin, HIGH);
-}
-
-void _on_LeftButton_released(Button2& b) {
-  Serial.println("Left released");
-  digitalWrite(BLUELEDPin, LOW);
-}
-
-
-// RIGHT
-void _on_RightButton_pressed(Button2& b) {
-  RFsend(ID_ALL, CMD_PING);
-  Serial.println("Right pressed");
-}
-
-void _on_RightButton_released(Button2& b) {
-  Serial.println("Right released");
-}
-
-
-// TRIGGER
-void _on_TriggerButton_pressed(Button2& b) {
-  if(millis() > T_lastShot+1000) {
-    Serial.println("Pew!");
-    shoot();
   }
 }
